@@ -57,7 +57,7 @@ void SubgraphSolver(Graph &g, uint64_t &total, int argc, char *argv[], MPI_Comm 
   mype = nvshmem_my_pe();
   npes = nvshmem_n_pes();
 #endif
-
+  vidType *part_id_list, *local_id_list;
   // Step2: Graph 1D partition
 // #define SUBGRAPH_LOADING
 #ifdef SUBGRAPH_LOADING
@@ -209,7 +209,90 @@ void SubgraphSolver(Graph &g, uint64_t &total, int argc, char *argv[], MPI_Comm 
   subgraph->set_max_degree(md);
   std::cout << "Construct Subgraph Time: " << t.Seconds() << " sec \n";
 #endif
+#ifdef METIS_1D_PARTITION
+  std::string prefix = argv[1];
+  std::ifstream f_parts((prefix + ".parts").c_str());
+  assert(f_parts);
+  int idx = 0;
+  // std::vector<vidType> part_id_list(nv, 0);
+  // std::vector<vidType> local_id_list(nv, 0);
+  part_id_list = custom_alloc_global<vidType>(nv);
+  local_id_list = custom_alloc_global<vidType>(nv);
+  std::vector<vidType> part_size(n_gpus, 0);
+  while (idx < nv)
+  {
+    f_parts >> part_id_list[idx];
+    part_size[part_id_list[idx]]++;
+    idx++;
+  }
 
+  t.Start();
+  int v_size = part_size[gpu_id];
+  std::vector<vidType> degrees(v_size, 0);
+  vidType *degree_list = custom_alloc_global<vidType>(nv);
+  int vid = 0;
+
+  std::vector<vidType> cnt_index(n_gpus, 0);
+  for (vidType v = 0; v < nv; v += 1)
+  {
+    int dst_gpu = part_id_list[v];
+
+    local_id_list[v] = cnt_index[dst_gpu];
+    cnt_index[dst_gpu]++;
+
+    if (dst_gpu != gpu_id)
+      continue;
+    degrees[vid] = g.get_degree(v);
+    // local_id_list[v] = vid;
+    vid++;
+  }
+#pragma omp parallel for
+  for (vidType v = 0; v < nv; v += 1)
+  {
+    degree_list[v] = g.get_degree(v);
+  }
+  eidType *offsets = custom_alloc_global<eidType>(v_size + 1);
+  parallel_prefix_sum<vidType, eidType>(degrees, offsets);
+  eidType e_size = offsets[v_size];
+  std::cout << " |V| = " << v_size << " |E| = " << e_size << "\n";
+  Graph *subgraph = new Graph();
+  subgraph->allocateFrom(v_size, e_size);
+
+  eidType subgraph_esize = 0;
+  vidType subgraph_vsize = 0;
+  MPI_Allreduce(&e_size, &subgraph_esize, 1, MPI_INT64_T, MPI_MAX, MPI_COMM_WORLD);
+  MPI_Allreduce(&v_size, &subgraph_vsize, 1, MPI_INT32_T, MPI_MAX, MPI_COMM_WORLD);
+
+  printf("Process %d: Max edge value is %ld, vertex value:%d\n", rank, subgraph_esize, subgraph_vsize);
+
+  vidType *subgraph_src_list = (vidType *)malloc(sizeof(vidType) * e_size);
+  // Construct new subgraph.
+#pragma omp parallel for
+  for (vidType v = 0; v < nv; v += 1)
+  {
+    // vidType vid = v / n_gpus;
+    int dst_gpu = part_id_list[v];
+    int vid_ = local_id_list[v];
+    if (dst_gpu != gpu_id)
+      continue;
+
+    auto begin = offsets[vid_];
+    auto end = offsets[vid_ + 1];
+    subgraph->fixEndEdge(vid_, end);
+    vidType j = 0;
+    for (auto u : g.N(v))
+    {
+      subgraph->constructEdge(begin + j, u);
+      subgraph_src_list[begin + j] = v;
+      j++;
+    }
+    // vid++;
+  }
+  t.Stop();
+  subgraph->set_max_degree(md);
+  std::cout << "Construct Subgraph Time: " << t.Seconds() << " sec \n";
+
+#endif // end of METIS_1D_PARTITION
 #endif
 
   // Dump sorted graph .......
@@ -227,7 +310,7 @@ void SubgraphSolver(Graph &g, uint64_t &total, int argc, char *argv[], MPI_Comm 
   CUDA_SAFE_CALL(cudaSetDevice(local_gpu_id));
   NvsGraphGPU d_graph;
 #ifdef USE_COMP || USE_FUSE
-  d_graph.init(*subgraph, gpu_id, n_gpus, subgraph_vsize, subgraph_esize, degree_list, nv);
+  d_graph.init(*subgraph, gpu_id, n_gpus, subgraph_vsize, subgraph_esize, degree_list, part_id_list, local_id_list, nv);
 #else
   d_graph.init(*subgraph, gpu_id, n_gpus, subgraph_vsize, subgraph_esize);
 #endif

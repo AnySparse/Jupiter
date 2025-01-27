@@ -115,13 +115,14 @@ enum COMM_TYPE {
 // #define EXTRA_CHECK
 #define HASH_1D_PARTITION
 // #define LOCALITY_1D_PARTITION
+// #define METIS_1D_PARTITION
 // #define PROFILING
 #define BATCH_LOAD
 // #define MERGE_NEIGHBORS_COMM
 #define FREQ_THD 2
 #define PEAK_CLK (float)1410000
 
-// #define MESSAGE_PASSING
+//#define MESSAGE_PASSING
 #define DELEGATION
 
 #define USE_FILTER

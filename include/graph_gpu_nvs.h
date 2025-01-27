@@ -1,5 +1,3 @@
-
-
 #pragma once
 #include "graph.h"
 #include "operations.cuh"
@@ -23,6 +21,9 @@ protected:
 #ifdef USE_COMP || USE_FUSE
   vidType *graph_degrees;
   vidType graph_nv;
+
+  vidType *d_part_ids;
+  vidType *d_local_ids;
 #endif
 public:
   int *d_g_v1_frequency, *d_v1_offset, *d_global_index; // merge neibours comm.
@@ -74,6 +75,13 @@ public:
   inline __device__ __host__ vidType is_local(vidType gv) { return dst_GPUId(gv) == device_id; }
 #endif
 
+#ifdef METIS_1D_PARTITION
+  inline __device__ __host__ vidType convert_to_local(vidType gv) { return d_local_ids[gv];}
+  inline __device__ __host__ vidType convert_to_global(vidType lv) { return -1;} //TODO:
+  inline __device__ __host__ vidType dst_GPUId(vidType gv) { return d_part_ids[gv];}
+  inline __device__ __host__ vidType is_local(vidType gv) { return dst_GPUId(gv) == device_id; }
+#endif
+
   inline __device__ __host__ vidType *fetch_local_neigbours(vidType vid)
   {
     #ifdef EXTRA_CHECK
@@ -103,12 +111,12 @@ public:
     nvshmem_int_get(adj_list, &d_colidx[recv_ebuffer[thread_id * SLOT_SIZE]], adj_size, remote_gpu_id);
   }
 
-  inline __device__ vidType get_degree_remote(vidType src) { 
+  inline __device__ vidType get_degree_remote(vidType src) {
     return vidType(getOutDegree_remote(src));
   }
   inline __device__ eidType getOutDegree_remote(vidType src)
   {
- 
+
     int remote_gpu_id = dst_GPUId(src);
     int remote_local_vid = convert_to_local(src);
 
@@ -123,7 +131,8 @@ public:
         atomicAdd(&comm_volumn[0], 2);
       }
 #endif
-
+    auto test_size = recv_ebuffer[thread_id * SLOT_SIZE + 1] - recv_ebuffer[thread_id * SLOT_SIZE];
+    // if(test_size!=graph_degrees[src]) printf("hahahahaah src:%d  true:%d false:%d\n",src, graph_degrees[src], test_size);
     return recv_ebuffer[thread_id * SLOT_SIZE + 1] - recv_ebuffer[thread_id * SLOT_SIZE];
   }
 
@@ -231,10 +240,18 @@ public:
     CUDA_SAFE_CALL(cudaFree(d_dst_list));
   }
   #ifdef USE_COMP || USE_FUSE
-  void init(Graph &g, int n, int m, vidType j, eidType k, vidType *degrees, int total_nv){
+  void init(Graph &g, int n, int m, vidType j, eidType k, vidType *degrees, vidType *part_ids, vidType *local_ids, int total_nv){
     graph_nv = total_nv;
     CUDA_SAFE_CALL(cudaMalloc((void **)&graph_degrees, total_nv * sizeof(vidType)));
     CUDA_SAFE_CALL(cudaMemcpy(graph_degrees, degrees, total_nv * sizeof(vidType), cudaMemcpyHostToDevice));
+
+  #ifdef METIS_1D_PARTITION
+    CUDA_SAFE_CALL(cudaMalloc((void **)&d_part_ids, total_nv * sizeof(vidType)));
+    CUDA_SAFE_CALL(cudaMemcpy(d_part_ids, part_ids, total_nv * sizeof(vidType), cudaMemcpyHostToDevice));
+
+    CUDA_SAFE_CALL(cudaMalloc((void **)&d_local_ids, total_nv * sizeof(vidType)));
+    CUDA_SAFE_CALL(cudaMemcpy(d_local_ids, local_ids, total_nv * sizeof(vidType), cudaMemcpyHostToDevice));
+   #endif
     init(g,n,m,j,k);
   }
   #endif
