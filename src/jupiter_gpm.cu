@@ -21,7 +21,7 @@ typedef cub::BlockReduce<AccType, BLOCK_SIZE> BlockReduce;
 #include "context_manager_engine.cuh"
 #include "gpu_kernels_codegen.cuh"
 
-#include "massage_passing_gpu_kernels.cuh"
+#include "message_passing_gpu_kernels.cuh"
 #include "delegation_gpu_kernels.cuh"
 
 void SubgraphSolver(Graph &g, uint64_t &total, int argc, char *argv[], MPI_Comm &mpi_comm, int rank, int nranks)
